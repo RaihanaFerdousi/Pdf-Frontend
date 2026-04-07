@@ -1,87 +1,151 @@
 import { useEffect, useRef } from "react";
 import { useLocation } from "react-router";
-import * as pdfjsLib from "pdfjs-dist";
-import Toolbar from "../Components/Toolbar";
+import * as React from "react";
+import Toolbar from "~/Components/Toolbar";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
-// Set worker from CDN
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+const BLANK_PAGE_HTML = `
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <style>
+        body { background-color: #121212; margin: 0; display: flex; justify-content: center; min-height: 100vh; }
+        #page-container { 
+          padding: 40px 0; 
+          display: flex; 
+          flex-direction: column; 
+          align-items: center; 
+          gap: 14px;
+        }
+        .pc { 
+          background: white; width: 600px; height: 1100px; 
+          position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+          overflow: hidden;
+          flex-shrink: 0;
+        }
+        .t { 
+          position: absolute; left: 50px; top: 50px; 
+          font-family: sans-serif; font-size: 16px; color: #1a1a1a;
+          min-width: 200px; outline: none; z-index: 10;
+        }
+      </style>
+    </head>
+    <body>
+      <div id="page-container">
+        <div class="pc" id="page-1">
+            <div class="t" contenteditable="true">Start typing your new PDF here...</div>
+        </div>
+      </div>
+    </body>
+  </html>
+`;
 
 export default function Editor() {
   const location = useLocation();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const pdfUrl = location.state?.pdfUrl;
+  const [blobUrl, setBlobUrl] = React.useState<string | null>(null);
+  const iframeRef = React.useRef<HTMLIFrameElement>(null);
+  const htmlUrl = location.state?.htmlUrl;
+  const isBlank = location.state?.isBlank;
 
-  useEffect(() => {
-    if (!pdfUrl || !containerRef.current) return;
+  React.useEffect(() => {
+    if (isBlank) {
+      const blob = new Blob([BLANK_PAGE_HTML], { type: 'text/html' });
+      setBlobUrl(URL.createObjectURL(blob));
+    } else if (htmlUrl) {
+      fetch(htmlUrl)
+        .then(res => res.text())
+        .then(html => {
+          const blob = new Blob([html], { type: 'text/html' });
+          setBlobUrl(URL.createObjectURL(blob));
+        });
+    }
+  }, [htmlUrl, isBlank]);
 
-    const renderPDF = async () => {
-      try {
-        const fullUrl = `http://localhost:3001${pdfUrl}`;
-        const loadingTask = pdfjsLib.getDocument(fullUrl);
-        const pdf = await loadingTask.promise;
-        
-        containerRef.current!.innerHTML = ""; 
+  const handleAddPage = () => {
+    const frame = iframeRef.current;
+    const doc = frame?.contentDocument || frame?.contentWindow?.document;
+    const container = doc?.getElementById('page-container');
+    if (!container || !doc) return;
 
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: 1.5 });
+    const newPage = doc.createElement('div');
+    newPage.className = 'pc';
+    const pageCount = container.querySelectorAll('.pc').length + 1;
+    newPage.id = `page-${pageCount}`;
+    container.appendChild(newPage);
 
-          const pageWrapper = document.createElement("div");
-          pageWrapper.className = "relative mb-8 shadow-2xl bg-white border border-gray-300";
-          pageWrapper.style.width = `${viewport.width}px`;
-          pageWrapper.style.height = `${viewport.height}px`;
+    const event = new CustomEvent('pageAdded');
+    doc.dispatchEvent(event);
+  };
 
-          const canvas = document.createElement("canvas");
-          const context = canvas.getContext("2d")!;
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
-          pageWrapper.appendChild(canvas);
 
-          // FIX APPLIED HERE
-          await page.render({ 
-            canvasContext: context, 
-            viewport: viewport,
-            canvas: canvas 
-          }).promise;
+  const setupStyles = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
+    const frame = e.currentTarget;
+    const frameDoc = frame.contentDocument || frame.contentWindow?.document;
+    if (!frameDoc) return;
 
-          const textLayerDiv = document.createElement("div");
-          textLayerDiv.className = "absolute top-0 left-0 textLayer overflow-hidden leading-none";
-          textLayerDiv.style.width = `${viewport.width}px`;
-          textLayerDiv.style.height = `${viewport.height}px`;
-          
-          pageWrapper.appendChild(textLayerDiv);
-          containerRef.current!.appendChild(pageWrapper);
-
-          const textContent = await page.getTextContent();
-          await pdfjsLib.renderTextLayer({
-            textContentSource: textContent,
-            container: textLayerDiv,
-            viewport: viewport,
-          }).promise;
-
-          const textDivs = textLayerDiv.querySelectorAll("span");
-          textDivs.forEach((span) => {
-            span.setAttribute("contenteditable", "true");
-            // Set styles so text is visible and editable
-            span.style.color = "black";
-            span.className += " hover:bg-blue-100/50 outline-none focus:bg-blue-200/50";
-          });
-        }
-      } catch (err) {
-        console.error("Error rendering PDF:", err);
+    const style = frameDoc.createElement('style');
+    style.innerHTML = `
+      #sidebar, .outline { display: none !important; }
+      body, html { background-color: #121212 !important; }
+      
+      .draggable-element { 
+        position: absolute; 
+        z-index: 1001; 
+        user-select: none;
       }
-    };
 
-    renderPDF();
-  }, [pdfUrl]);
+      .resizer-handle {
+        width: 12px; height: 12px; background: black;
+        position: absolute; right: -6px; bottom: -6px;
+        cursor: nwse-resize; display: none; z-index: 2001;
+        border: 2px solid white; border-radius: 2px;
+      }
+
+      .draggable-element.selected { outline: 2px solid #3b82f6; }
+      .draggable-element.selected .resizer-handle { display: block; }
+      .text-box { user-select: text !important; }
+      
+      #draw-canvas[style*="pointer-events: none"] { z-index: -1 !important; }
+    `;
+    frameDoc.head.appendChild(style);
+
+    frameDoc.addEventListener('mousedown', (ev) => {
+      const target = ev.target as HTMLElement;
+
+      // Don't clear selection if clicking an element, its handle, or a text box
+      const isElement = target.closest('.draggable-element');
+      const isHandle = target.classList.contains('resizer-handle');
+
+      if (!isElement && !isHandle) {
+        frameDoc.querySelectorAll('.draggable-element').forEach(el =>
+          el.classList.remove('selected')
+        );
+      }
+    });
+
+    const unlock = () => {
+      frameDoc.querySelectorAll('.t').forEach(el => {
+        (el as HTMLElement).contentEditable = "true";
+      });
+    };
+    setInterval(unlock, 1000);
+  };
 
   return (
-    <div className="flex flex-col min-h-screen bg-neutral-800">
-      <Toolbar onExport={() => alert("Export logic coming next!")} />
-      <div className="flex-1 p-8 overflow-y-auto">
-        <div ref={containerRef} className="flex flex-col items-center">
-          {!pdfUrl && <div className="text-white">Please upload a PDF first.</div>}
-        </div>
+    <div className="flex flex-col h-screen bg-zinc-950 overflow-hidden">
+      <Toolbar onAddPage={handleAddPage} />
+      <div className="flex-1 flex justify-center p-4">
+        {blobUrl ? (
+          <iframe
+            ref={iframeRef}
+            src={blobUrl}
+            onLoad={setupStyles}
+            className="w-full bg-zinc-950 border-none rounded-lg h-[88vh]"
+          />
+        ) : (
+          <p className="text-white">Loading Editor...</p>
+        )}
       </div>
     </div>
   );

@@ -1,196 +1,316 @@
 import {
-  Type,
-  Pencil,
-  Shapes,
-  ImagePlus,
-  Eraser,
-  PlusSquare,
-  Download,
-  Square,
-  Star,
-  ChevronDown,
+  Type, Pencil, Shapes, Eraser, Download,
+  Square, Undo2, Redo2, PlusCircle, MinusCircle, Plus
 } from "lucide-react";
 import { RiTriangleLine } from "react-icons/ri";
 import { FaRegCircle } from "react-icons/fa";
-import * as React from "react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 interface ToolbarProps {
   onAddPage?: () => void;
   onExport?: () => void;
 }
 
-const ToolGroup: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="flex items-center gap-1 px-4 border-r border-gray-200 last:border-r-0">
-    {children}
-  </div>
-);
-
-const ToolButton = ({ icon: Icon, label, onClick }: any) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className="flex flex-col items-center justify-center min-w-[72px] h-16 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition-colors"
-  >
-    <Icon size={20} />
-    <span className="text-[11px] font-medium mt-1.5">{label}</span>
-  </button>
-);
-
 export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
   const [isShapesOpen, setIsShapesOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [selectedTextEl, setSelectedTextEl] = useState<HTMLElement | null>(null);
 
-  const enableTextEdit = () => {
-    document.querySelectorAll(".pdf-html span").forEach((el) => {
-      (el as HTMLElement).contentEditable = "true";
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const isInternalChange = useRef(false);
+
+  const getTargetContext = () => {
+    const iframe = document.querySelector('iframe');
+    const doc = iframe?.contentDocument || iframe?.contentWindow?.document || document;
+    const selectedPage = doc.querySelector('.pc.selected-page') || doc.querySelector('.pc:last-child') || doc.querySelector('.pc');
+    return { doc, container: selectedPage as HTMLElement, pageContainer: doc.getElementById('page-container') };
+  };
+
+  // --- UNDO / REDO ---
+
+  const saveState = () => {
+    if (isInternalChange.current) return;
+    const { pageContainer, doc } = getTargetContext();
+    if (!pageContainer || pageContainer.innerHTML.trim() === "") return;
+
+    const snapshot = pageContainer.innerHTML;
+
+    clearSelection(doc);
+
+    setHistory(prev => {
+      if (prev[historyIndex] === snapshot) return prev;
+      const newHistory = prev.slice(0, historyIndex + 1);
+      return [...newHistory, snapshot].slice(-50);
+    });
+    setHistoryIndex(prev => {
+      const nextIndex = historyIndex + 1;
+      return nextIndex;
     });
   };
 
-  const createShape = (styles: Partial<CSSStyleDeclaration>) => {
-    const iframe = document.querySelector('iframe');
-    const frameDoc = iframe?.contentDocument || iframe?.contentWindow?.document;
-    if (!frameDoc) return;
-
-    const pageContainer = frameDoc.getElementById('page-container');
-    if (!pageContainer) return;
-
-    let layer = frameDoc.getElementById("draw-layer");
-    if (!layer) {
-      layer = frameDoc.createElement('div');
-      layer.id = 'draw-layer';
-      Object.assign(layer.style, {
-        position: 'absolute',
-        top: '0',
-        left: '0',
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
-        zIndex: '999'
-      });
-      pageContainer.appendChild(layer);
-    }
-
-    const el = frameDoc.createElement("div");
-    el.style.position = "absolute";
-    el.style.left = "50px";
-    el.style.top = "50px";
-    el.style.cursor = "move";
-    el.style.pointerEvents = "auto";
-
-    Object.assign(el.style, styles);
-
-    el.onmousedown = (e) => {
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const shiftX = e.clientX - rect.left;
-      const shiftY = e.clientY - rect.top;
-
-      const move = (moveE: MouseEvent) => {
-        el.style.left = (moveE.clientX - shiftX) + "px";
-        el.style.top = (moveE.clientY - shiftY) + "px";
-      };
-
-      frameDoc.addEventListener("mousemove", move);
-      frameDoc.onmouseup = () => {
-        frameDoc.removeEventListener("mousemove", move);
-      };
-    };
-
-    layer.appendChild(el);
+  const undo = () => {
+    if (historyIndex <= 0) return;
+    applyState(historyIndex - 1);
   };
 
-  const addSquare = () => createShape({
-    width: "100px",
-    height: "100px",
-    backgroundColor: "#3b83f6",
-  });
+  const redo = () => {
+    if (historyIndex >= history.length - 1) return;
+    applyState(historyIndex + 1);
+  };
 
-  const addCircle = () => createShape({
-    width: "100px",
-    height: "100px",
-    backgroundColor: "#f63b3b",
-    borderRadius: "50%"
-  });
+  const applyState = (index: number) => {
+    const { pageContainer, doc } = getTargetContext();
+    if (!pageContainer) return;
 
-const addTriangle = () => createShape({
-  width: "0",
-  height: "0",
-  backgroundColor: "transparent", 
-  borderLeft: "50px solid transparent",
-  borderRight: "50px solid transparent",
-  borderBottom: "100px solid #208c20",
-});
+    isInternalChange.current = true;
+    pageContainer.innerHTML = history[index];
+    setHistoryIndex(index);
 
-  const addStar = () => createShape({
-    width: "100px",
-    height: "100px",
-    backgroundColor: "#eaaa08",
-    clipPath: "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)",
-  });
+    setTimeout(() => {
+      rebindAll(doc);
+      setupCanvas(doc);
+      isInternalChange.current = false;
+    }, 10);
+  };
+
+  const rebindAll = (doc: Document) => {
+    doc.querySelectorAll('.draggable-element').forEach((el) => {
+      const container = el.closest('.pc') as HTMLElement;
+      if (container) attachMoveAndResize(el as HTMLElement, doc, container);
+    });
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => saveState(), 1000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const clearSelection = (doc: Document) => {
+    doc.querySelectorAll('.draggable-element').forEach(el => el.classList.remove('selected'));
+    setSelectedTextEl(null);
+  };
+
+  const setupCanvas = (doc: Document) => {
+    const pages = doc.querySelectorAll('.pc');
+    pages.forEach((page: any) => {
+      let canvas = page.querySelector('.draw-canvas') as HTMLCanvasElement;
+      if (!canvas) {
+        canvas = doc.createElement('canvas');
+        canvas.className = 'draw-canvas';
+        canvas.width = page.offsetWidth;
+        canvas.height = page.offsetHeight;
+        Object.assign(canvas.style, {
+          position: 'absolute', top: '0', left: '0', zIndex: '500', pointerEvents: 'none'
+        });
+        page.appendChild(canvas);
+      }
+
+      canvas.style.pointerEvents = (activeTool === 'pencil' || activeTool === 'eraser') ? 'auto' : 'none';
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      canvas.onmousedown = (e) => {
+        if (activeTool !== 'pencil' && activeTool !== 'eraser') return;
+        ctx.beginPath();
+        ctx.moveTo(e.offsetX, e.offsetY);
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = activeTool === 'eraser' ? 25 : 3;
+        ctx.lineCap = "round";
+        ctx.globalCompositeOperation = activeTool === 'eraser' ? 'destination-out' : 'source-over';
+
+        canvas.onmousemove = (mv) => {
+          ctx.lineTo(mv.offsetX, mv.offsetY);
+          ctx.stroke();
+        };
+      };
+
+      canvas.onmouseup = () => {
+        canvas.onmousemove = null;
+        saveState();
+      };
+    });
+  };
+
+  useEffect(() => {
+    const { doc } = getTargetContext();
+    setupCanvas(doc);
+    const handlePageUpdate = () => {
+      setupCanvas(doc);
+      saveState();
+    };
+    doc.addEventListener('pageAdded', handlePageUpdate);
+    return () => doc.removeEventListener('pageAdded', handlePageUpdate);
+  }, [activeTool]);
+
+  const attachMoveAndResize = (el: HTMLElement, doc: Document, container: HTMLElement) => {
+    let handle = el.querySelector('.resizer-handle') as HTMLElement;
+    if (!handle) {
+      handle = doc.createElement('div');
+      handle.className = 'resizer-handle';
+      el.appendChild(handle);
+    }
+
+    el.onmousedown = (e) => {
+      if (e.target === handle) return;
+      if (activeTool === 'eraser') { el.remove(); saveState(); return; }
+
+      e.stopPropagation();
+      clearSelection(doc);
+      el.classList.add('selected');
+
+      doc.querySelectorAll('.draggable-element').forEach(other => {
+        if (other !== el) other.classList.remove('selected');
+      });
+      el.classList.add('selected');
+
+      if (el.classList.contains('text-box')) setSelectedTextEl(el);
+
+      const rect = el.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+
+      const move = (mE: MouseEvent) => {
+        const cRect = container.getBoundingClientRect();
+        el.style.left = `${mE.clientX - cRect.left - offsetX}px`;
+        el.style.top = `${mE.clientY - cRect.top - offsetY}px`;
+      };
+
+      const stop = () => {
+        doc.removeEventListener("mousemove", move);
+        doc.removeEventListener("mouseup", stop);
+        saveState();
+      };
+      doc.addEventListener("mousemove", move);
+      doc.addEventListener("mouseup", stop);
+    };
+
+    handle.onmousedown = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      el.classList.add('selected');
+
+      const startW = el.offsetWidth;
+      const startH = el.offsetHeight;
+      const startX = e.clientX;
+      const startY = e.clientY;
+
+      const resize = (mE: MouseEvent) => {
+        const nw = startW + (mE.clientX - startX);
+        const nh = startH + (mE.clientY - startY);
+        if (nw > 30) el.style.width = `${nw}px`;
+        if (nh > 30) el.style.height = `${nh}px`;
+      };
+
+      const stopR = () => {
+        doc.removeEventListener("mousemove", resize);
+        doc.removeEventListener("mouseup", stopR);
+        saveState();
+      };
+      doc.addEventListener("mousemove", resize);
+      doc.addEventListener("mouseup", stopR);
+    };
+  };
+
+  const createText = () => {
+    const { doc, container } = getTargetContext();
+    if (!container) return;
+    clearSelection(doc);
+    const el = doc.createElement("div");
+    el.className = "draggable-element text-box selected";
+    el.innerHTML = '<div contenteditable="true" style="outline:none;min-width:50px;">New Text</div>';
+    Object.assign(el.style, {
+      position: 'absolute', left: '50px', top: '50px', fontSize: '24px',
+      padding: '10px', zIndex: '2000', cursor: 'move', color: 'black'
+    });
+    attachMoveAndResize(el, doc, container);
+    container.appendChild(el);
+    setSelectedTextEl(el);
+    saveState();
+  };
+
+  const createShape = (type: 'square' | 'circle' | 'triangle') => {
+    const { doc, container } = getTargetContext();
+    if (!container) return;
+    clearSelection(doc);
+    const el = doc.createElement("div");
+    el.className = "draggable-element selected";
+    const base = { position: 'absolute', left: '100px', top: '100px', width: '120px', height: '120px', zIndex: '2200', cursor: 'move' };
+    if (type === 'square') Object.assign(el.style, base, { backgroundColor: '#3b82f6' });
+    if (type === 'circle') Object.assign(el.style, base, { backgroundColor: '#ef4444', borderRadius: '50%' });
+    if (type === 'triangle') Object.assign(el.style, base, { backgroundColor: '#22c55e', clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' });
+    attachMoveAndResize(el, doc, container);
+    container.appendChild(el);
+    setIsShapesOpen(false);
+    saveState();
+  };
+
+  const changeFontSize = (delta: number) => {
+    if (!selectedTextEl) return;
+    const current = parseInt(window.getComputedStyle(selectedTextEl).fontSize);
+    selectedTextEl.style.fontSize = `${current + delta}px`;
+    saveState();
+  };
 
   return (
-    <nav className="fixed top-0 left-0 w-full bg-white border-b border-gray-200 shadow-sm z-[100] select-none">
+    <nav className="fixed top-0 left-0 w-full bg-zinc-900 border-b border-zinc-800 shadow-md z- text-zinc-100 font-sans">
       <div className="flex items-center justify-between px-6 h-20">
         <div className="flex items-center">
           <ToolGroup>
-            <ToolButton icon={Type} label="Text" onClick={enableTextEdit} />
-            <ToolButton icon={Pencil} label="Free Draw" />
-
-            <div className="relative">
-              <button
-                onClick={() => setIsShapesOpen(!isShapesOpen)}
-                className={`flex flex-col items-center justify-center min-w-[72px] h-16 rounded-lg transition-colors ${
-                  isShapesOpen ? "bg-blue-50 text-blue-600" : "text-gray-500 hover:bg-gray-100"
-                }`}
-              >
-                <div className="flex items-center gap-0.5">
-                  <Shapes size={20} />
-                  <ChevronDown size={12} className={isShapesOpen ? "rotate-180" : ""} />
-                </div>
-                <span className="text-[11px] mt-1.5">Shapes</span>
-              </button>
-
-              {isShapesOpen && (
-                <div className="absolute left-0 mt-2 w-44 bg-white border border-gray-200 rounded-xl shadow-2xl p-1.5 z-[9999] flex flex-col gap-0.5">
-                  <button onClick={addSquare} className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg text-left">
-                    <Square size={16} className="text-gray-500" /> <span className="font-medium">Square</span>
-                  </button>
-                  <button onClick={addCircle} className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg text-left">
-                    <FaRegCircle size={16} className="text-gray-500" /> <span className="font-medium">Circle</span>
-                  </button>
-                  <button onClick={addTriangle} className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg text-left">
-                    <RiTriangleLine size={16} className="text-gray-500" /> <span className="font-medium">Triangle</span>
-                  </button>
-                  <button onClick={addStar} className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg text-left">
-                    <Star size={16} className="text-gray-500" /> <span className="font-medium">Star</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <label className="cursor-pointer">
-              <div className="flex flex-col items-center justify-center min-w-[72px] h-16 rounded-lg text-gray-500 hover:bg-gray-100">
-                <ImagePlus size={20} />
-                <span className="text-[11px] mt-1.5">Img upload</span>
-              </div>
-              <input type="file" accept="image/*" className="hidden" />
-            </label>
+            <button
+              onClick={undo}
+              disabled={historyIndex <= 0}
+              className="p-2 hover:bg-zinc-800 disabled:opacity-20 transition-opacity"
+            >
+              <Undo2 size={18} />
+            </button>
+            <button
+              onClick={redo}
+              disabled={historyIndex >= history.length - 1}
+              className="p-2 hover:bg-zinc-800 disabled:opacity-20 transition-opacity"
+            >
+              <Redo2 size={18} />
+            </button>
           </ToolGroup>
 
           <ToolGroup>
-            <ToolButton icon={Eraser} label="Eraser" />
+            <ToolButton icon={Type} label="Text" onClick={() => { setActiveTool('text'); createText(); }} active={activeTool === 'text'} />
+            {selectedTextEl && (
+              <div className="flex gap-1 bg-zinc-800 rounded-lg p-1 mx-2">
+                <button onClick={() => changeFontSize(-2)} className="p-1 hover:text-blue-400"><MinusCircle size={16} /></button>
+                <button onClick={() => changeFontSize(2)} className="p-1 hover:text-blue-400"><PlusCircle size={16} /></button>
+              </div>
+            )}
+            <ToolButton icon={Pencil} label="Draw" onClick={() => setActiveTool('pencil')} active={activeTool === 'pencil'} />
+            <div className="relative">
+              <button onClick={() => setIsShapesOpen(!isShapesOpen)} className={`flex flex-col items-center justify-center min-w-[72px] h-16 rounded-lg transition-all ${activeTool === 'shapes' ? 'text-blue-400' : 'text-zinc-400 hover:bg-zinc-800'}`}>
+                <Shapes size={20} /><span className="text-[11px] mt-1.5 font-medium">Shapes</span>
+              </button>
+              {isShapesOpen && (
+                <div className="absolute left-0 mt-2 w-44 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-1.5 z- flex flex-col">
+                  <button onClick={() => createShape('square')} className="flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-zinc-800 rounded-lg"><Square size={16} /> Square</button>
+                  <button onClick={() => createShape('circle')} className="flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-zinc-800 rounded-lg"><FaRegCircle size={16} /> Circle</button>
+                  <button onClick={() => createShape('triangle')} className="flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-zinc-800 rounded-lg"><RiTriangleLine size={16} /> Triangle</button>
+                </div>
+              )}
+            </div>
+            <ToolButton icon={Eraser} label="Eraser" onClick={() => setActiveTool('eraser')} active={activeTool === 'eraser'} />
           </ToolGroup>
         </div>
 
         <div className="flex items-center gap-4">
-          <button onClick={onAddPage} className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">
-            <PlusSquare size={18} /> Add Page
-          </button>
-          <button onClick={onExport} className="flex items-center gap-2 bg-black text-white px-5 py-2.5 rounded-xl hover:bg-gray-800 transition-all active:scale-95">
-            <Download size={18} /> Export
-          </button>
+          <button onClick={onAddPage} className="flex items-center gap-2 px-4 py-2 border border-zinc-700 rounded-xl hover:bg-zinc-800 transition active:scale-95"><Plus size={18} /> Add Page</button>
+          <button onClick={onExport} className="bg-white text-black px-6 py-2.5 rounded-xl hover:bg-zinc-200 font-bold flex items-center gap-2 shadow-lg active:scale-95"><Download size={18} /> Export</button>
         </div>
       </div>
     </nav>
   );
 }
+
+const ToolGroup = ({ children }: any) => <div className="flex items-center gap-1 px-4 border-r border-zinc-800 last:border-r-0">{children}</div>;
+const ToolButton = ({ icon: Icon, label, onClick, active }: any) => (
+  <button onClick={onClick} className={`flex flex-col items-center justify-center min-w-[72px] h-16 rounded-lg transition-all ${active ? "bg-zinc-800 text-blue-400 shadow-inner" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"}`}>
+    <Icon size={20} /><span className="text-[11px] font-medium mt-1.5">{label}</span>
+  </button>
+);
