@@ -5,17 +5,17 @@ import { useNavigate } from "react-router";
 export function Welcome() {
   const navigate = useNavigate();
   const [isUploading, setIsUploading] = useState(false);
-  
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; 
+    const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
     const formData = new FormData();
-    formData.append("pdf", file); 
+    formData.append("pdf", file);
 
     try {
-      const response = await fetch("http://localhost:3001/api/upload-pdf", {
+      const response = await fetch("/api/upload-pdf", {
         method: "POST",
         body: formData,
       });
@@ -25,7 +25,7 @@ export function Welcome() {
       const data = await response.json();
 
       if (data.htmlUrl) {
-        navigate("/editor", { state: { htmlUrl: data.htmlUrl } }); 
+        navigate("/editor", { state: { htmlUrl: data.htmlUrl } });
       }
 
     } catch (err) {
@@ -56,7 +56,7 @@ export function Welcome() {
           </label>
 
           <button
-            onClick={() => navigate('/editor')}
+            onClick={() => navigate('/editor', { state: { isBlank: true } })}
             disabled={isUploading}
             className="font-hand px-8 py-2 border-2 border-white rounded-xl hover:bg-white hover:text-black transition"
           >
