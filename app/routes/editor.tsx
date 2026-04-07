@@ -1,9 +1,9 @@
 import { useLocation } from "react-router";
-import Toolbar from "../Components/Toolbar";
 import * as React from "react";
 
 export default function Editor() {
   const location = useLocation();
+  // We grab the URL passed from the Welcome component's navigate() call
   const htmlUrl = location.state?.htmlUrl;
 
   const setupStyles = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
@@ -29,37 +29,36 @@ export default function Editor() {
           margin: 0 auto !important; overflow: hidden !important;
           box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #27272a !important;
         }
-          
-        .t { color: #000000 !important; cursor: text !important; }
-
-        .draggable-element { border: 1px solid transparent; }
-        .draggable-element.selected { border: 1px dashed #3b82f6 !important; }
-        .draggable-element.selected .resizer-handle { display: block !important; }
+        .t { color: #000000 !important; cursor: text !important; outline: none !important; }
       `;
       frameDoc.head.appendChild(style);
-      frameDoc.querySelectorAll('.t').forEach((el) => { (el as HTMLElement).contentEditable = "true"; });
+      
+      // Makes the converted text lines editable
+      frameDoc.querySelectorAll('.t').forEach((el) => { 
+        (el as HTMLElement).contentEditable = "true"; 
+      });
     }
   };
 
   return (
     <div className="flex flex-col min-h-screen bg-zinc-950 overflow-hidden">
-      <Toolbar />
-      <style>{`
-        .draggable-element { border: 1px solid transparent; }
-        .draggable-element.selected { border: 1px dashed #3b82f6 !important; }
-        .draggable-element.selected .resizer-handle { display: block !important; }
-      `}</style>
-      <div className="pt-24 flex-1 flex justify-center p-4 overflow-hidden">
+      <div className="flex-1 flex justify-center p-4">
         {htmlUrl ? (
-          <iframe src={htmlUrl} onLoad={setupStyles} className="w-full bg-zinc-950 border-none rounded-lg h-[85vh]" />
+          <iframe 
+            src={htmlUrl} 
+            onLoad={setupStyles} 
+            className="w-full bg-zinc-950 border-none rounded-lg h-[90vh]" 
+            title="PDF Editor Frame"
+          />
         ) : (
-          <div className="w-full bg-zinc-950 overflow-y-auto rounded-lg flex flex-col h-[85vh] items-center p-4">
-            <div id="page-container" className="mx-auto w-[600px] bg-white p-20 min-h-[850px] shadow-2xl mb-10 text-black relative overflow-hidden rounded-sm">
-              <div contentEditable className="outline-none min-h-[200px] cursor-text">
-                <h1 className="text-3xl font-bold mb-4">New PDF</h1>
-                <p className="text-gray-700">Text here...</p>
-              </div>
-            </div>
+          <div className="flex flex-col items-center justify-center text-white gap-4">
+            <p className="text-xl">No PDF data found.</p>
+            <button 
+              onClick={() => window.location.href = '/'}
+              className="px-4 py-2 bg-white text-black rounded-lg"
+            >
+              Go Back to Upload
+            </button>
           </div>
         )}
       </div>
