@@ -1,65 +1,139 @@
 import { useLocation } from "react-router";
 import * as React from "react";
+import Toolbar from "~/Components/Toolbar";
+
+const BLANK_PAGE_HTML = `
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <style>
+        body { background-color: #121212; margin: 0; display: flex; justify-content: center; min-height: 100vh; }
+        #page-container { 
+          padding: 40px 0; 
+          display: flex; 
+          flex-direction: column; 
+          align-items: center; 
+          gap: 40px; /* SPACE BETWEEN PAGES */
+        }
+        .pc { 
+          background: white; width: 600px; height: 1100px; 
+          position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+          overflow: hidden;
+          flex-shrink: 0;
+        }
+        .t { 
+          position: absolute; left: 50px; top: 50px; 
+          font-family: sans-serif; font-size: 16px; color: #1a1a1a;
+          min-width: 200px; outline: none; z-index: 10;
+        }
+      </style>
+    </head>
+    <body>
+      <div id="page-container">
+        <div class="pc" id="page-1">
+            <div class="t" contenteditable="true">Start typing your new PDF here...</div>
+        </div>
+      </div>
+    </body>
+  </html>
+`;
 
 export default function Editor() {
   const location = useLocation();
-  // We grab the URL passed from the Welcome component's navigate() call
+  const [blobUrl, setBlobUrl] = React.useState<string | null>(null);
+  const iframeRef = React.useRef<HTMLIFrameElement>(null);
   const htmlUrl = location.state?.htmlUrl;
+  const isBlank = location.state?.isBlank;
+
+  React.useEffect(() => {
+    if (isBlank) {
+      const blob = new Blob([BLANK_PAGE_HTML], { type: 'text/html' });
+      setBlobUrl(URL.createObjectURL(blob));
+    } else if (htmlUrl) {
+      fetch(htmlUrl)
+        .then(res => res.text())
+        .then(html => {
+          const blob = new Blob([html], { type: 'text/html' });
+          setBlobUrl(URL.createObjectURL(blob));
+        });
+    }
+  }, [htmlUrl, isBlank]);
+
+  const handleAddPage = () => {
+    const frame = iframeRef.current;
+    const doc = frame?.contentDocument || frame?.contentWindow?.document;
+    const container = doc?.getElementById('page-container');
+    if (!container || !doc) return;
+
+    const newPage = doc.createElement('div');
+    newPage.className = 'pc';
+    const pageCount = container.querySelectorAll('.pc').length + 1;
+    newPage.id = `page-${pageCount}`;
+    container.appendChild(newPage);
+
+    const event = new CustomEvent('pageAdded');
+    doc.dispatchEvent(event);
+  };
 
   const setupStyles = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
     const frame = e.currentTarget;
     const frameDoc = frame.contentDocument || frame.contentWindow?.document;
+    if (!frameDoc) return;
 
-    if (frameDoc) {
-      const style = frameDoc.createElement('style');
-      style.innerHTML = `
-        #sidebar { display: none !important; }
-        body, html { 
-          background-color: #09090b !important; 
-          margin: 0 !important; padding: 0 !important;
-        }
-        #page-container {
-          position: relative !important; margin: 0 auto !important;
-          display: flex !important; flex-direction: column !important;
-          align-items: center !important; min-width: 100% !important;
-          padding: 20px 0 100px 0 !important;
-        }
-        .pc { 
-          background-color: white !important; position: relative !important; 
-          margin: 0 auto !important; overflow: hidden !important;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #27272a !important;
-        }
-        .t { color: #000000 !important; cursor: text !important; outline: none !important; }
-      `;
-      frameDoc.head.appendChild(style);
+    const style = frameDoc.createElement('style');
+    style.innerHTML = `
+      #sidebar, .outline { display: none !important; }
+      body, html { background-color: #121212 !important; }
       
-      // Makes the converted text lines editable
-      frameDoc.querySelectorAll('.t').forEach((el) => { 
-        (el as HTMLElement).contentEditable = "true"; 
+      .draggable-element { 
+        position: absolute; 
+        z-index: 1001; 
+        user-select: none;
+      }
+
+      .resizer-handle {
+        width: 12px; height: 12px; background: black;
+        position: absolute; right: -6px; bottom: -6px;
+        cursor: nwse-resize; display: none; z-index: 2001;
+        border: 2px solid white; border-radius: 2px;
+      }
+
+      .draggable-element.selected { outline: 2px solid #3b82f6; }
+      .draggable-element.selected .resizer-handle { display: block; }
+      .text-box { user-select: text !important; }
+      
+      #draw-canvas[style*="pointer-events: none"] { z-index: -1 !important; }
+    `;
+    frameDoc.head.appendChild(style);
+
+    frameDoc.addEventListener('mousedown', (ev) => {
+      const target = ev.target as HTMLElement;
+      if (target.id === 'page-container' || target.tagName === 'BODY' || target.classList.contains('pc')) {
+        frameDoc.querySelectorAll('.draggable-element').forEach(el => el.classList.remove('selected'));
+      }
+    });
+
+    const unlock = () => {
+      frameDoc.querySelectorAll('.t').forEach(el => {
+        (el as HTMLElement).contentEditable = "true";
       });
-    }
+    };
+    setInterval(unlock, 1000);
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-zinc-950">
+      <Toolbar onAddPage={handleAddPage} />
       <div className="flex-1 flex justify-center p-4">
-        {htmlUrl ? (
-          <iframe 
-            src={htmlUrl} 
-            onLoad={setupStyles} 
-            className="w-full bg-zinc-950 border-none rounded-lg h-[90vh]" 
-            title="PDF Editor Frame"
+        {blobUrl ? (
+          <iframe
+            ref={iframeRef}
+            src={blobUrl}
+            onLoad={setupStyles}
+            className="w-full bg-zinc-950 border-none rounded-lg h-[88vh]"
           />
         ) : (
-          <div className="flex flex-col items-center justify-center text-white gap-4">
-            <p className="text-xl">No PDF data found.</p>
-            <button 
-              onClick={() => window.location.href = '/'}
-              className="px-4 py-2 bg-white text-black rounded-lg"
-            >
-              Go Back to Upload
-            </button>
-          </div>
+          <p className="text-white">Loading Editor...</p>
         )}
       </div>
     </div>
