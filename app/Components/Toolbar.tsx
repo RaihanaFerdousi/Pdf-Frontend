@@ -4,7 +4,7 @@ import {
 } from "lucide-react";
 import { RiTriangleLine } from "react-icons/ri";
 import { FaRegCircle } from "react-icons/fa";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 interface ToolbarProps {
   onAddPage?: () => void;
@@ -15,33 +15,84 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
   const [isShapesOpen, setIsShapesOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [selectedTextEl, setSelectedTextEl] = useState<HTMLElement | null>(null);
+
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const isInternalChange = useRef(false);
 
   const getTargetContext = () => {
     const iframe = document.querySelector('iframe');
     const doc = iframe?.contentDocument || iframe?.contentWindow?.document || document;
     const selectedPage = doc.querySelector('.pc.selected-page') || doc.querySelector('.pc:last-child') || doc.querySelector('.pc');
-    return { doc, container: selectedPage as HTMLElement };
+    return { doc, container: selectedPage as HTMLElement, pageContainer: doc.getElementById('page-container') };
   };
+
+  // --- UNDO / REDO ---
+
+  const saveState = () => {
+    if (isInternalChange.current) return;
+    const { pageContainer, doc } = getTargetContext();
+    if (!pageContainer || pageContainer.innerHTML.trim() === "") return;
+
+    const snapshot = pageContainer.innerHTML;
+
+    clearSelection(doc);
+
+    setHistory(prev => {
+      if (prev[historyIndex] === snapshot) return prev;
+      const newHistory = prev.slice(0, historyIndex + 1);
+      return [...newHistory, snapshot].slice(-50);
+    });
+    setHistoryIndex(prev => {
+      const nextIndex = historyIndex + 1;
+      return nextIndex;
+    });
+  };
+
+  const undo = () => {
+    if (historyIndex <= 0) return;
+    applyState(historyIndex - 1);
+  };
+
+  const redo = () => {
+    if (historyIndex >= history.length - 1) return;
+    applyState(historyIndex + 1);
+  };
+
+  const applyState = (index: number) => {
+    const { pageContainer, doc } = getTargetContext();
+    if (!pageContainer) return;
+
+    isInternalChange.current = true;
+    pageContainer.innerHTML = history[index];
+    setHistoryIndex(index);
+
+    setTimeout(() => {
+      rebindAll(doc);
+      setupCanvas(doc);
+      isInternalChange.current = false;
+    }, 10);
+  };
+
+  const rebindAll = (doc: Document) => {
+    doc.querySelectorAll('.draggable-element').forEach((el) => {
+      const container = el.closest('.pc') as HTMLElement;
+      if (container) attachMoveAndResize(el as HTMLElement, doc, container);
+    });
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => saveState(), 1000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const clearSelection = (doc: Document) => {
     doc.querySelectorAll('.draggable-element').forEach(el => el.classList.remove('selected'));
     setSelectedTextEl(null);
   };
 
-  const saveState = () => {
-    const iframe = document.querySelector('iframe');
-    const container = iframe?.contentDocument?.getElementById('page-container');
-    if (!container) return;
-    setHistory(prev => [...prev.slice(0, historyIndex + 1), container.innerHTML]);
-    setHistoryIndex(prev => prev + 1);
-  };
-
-  // --- DRAWING LOGIC ---
   const setupCanvas = (doc: Document) => {
     const pages = doc.querySelectorAll('.pc');
-
     pages.forEach((page: any) => {
       let canvas = page.querySelector('.draw-canvas') as HTMLCanvasElement;
       if (!canvas) {
@@ -56,7 +107,6 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
       }
 
       canvas.style.pointerEvents = (activeTool === 'pencil' || activeTool === 'eraser') ? 'auto' : 'none';
-
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
@@ -85,8 +135,10 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
   useEffect(() => {
     const { doc } = getTargetContext();
     setupCanvas(doc);
-
-    const handlePageUpdate = () => setupCanvas(doc);
+    const handlePageUpdate = () => {
+      setupCanvas(doc);
+      saveState();
+    };
     doc.addEventListener('pageAdded', handlePageUpdate);
     return () => doc.removeEventListener('pageAdded', handlePageUpdate);
   }, [activeTool]);
@@ -100,15 +152,17 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
     }
 
     el.onmousedown = (e) => {
-      if (activeTool === 'eraser') { el.remove(); saveState(); return; }
       if (e.target === handle) return;
+      if (activeTool === 'eraser') { el.remove(); saveState(); return; }
 
       e.stopPropagation();
       clearSelection(doc);
       el.classList.add('selected');
 
-      doc.querySelectorAll('.pc').forEach(p => p.classList.remove('selected-page'));
-      container.classList.add('selected-page');
+      doc.querySelectorAll('.draggable-element').forEach(other => {
+        if (other !== el) other.classList.remove('selected');
+      });
+      el.classList.add('selected');
 
       if (el.classList.contains('text-box')) setSelectedTextEl(el);
 
@@ -132,7 +186,11 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
     };
 
     handle.onmousedown = (e) => {
-      e.stopPropagation(); e.preventDefault();
+      e.stopPropagation();
+      e.preventDefault();
+
+      el.classList.add('selected');
+
       const startW = el.offsetWidth;
       const startH = el.offsetHeight;
       const startX = e.clientX;
@@ -164,7 +222,7 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
     el.innerHTML = '<div contenteditable="true" style="outline:none;min-width:50px;">New Text</div>';
     Object.assign(el.style, {
       position: 'absolute', left: '50px', top: '50px', fontSize: '24px',
-      padding: '10px', zIndex: '2000', cursor: 'move', color: 'black', backgroundColor: 'white'
+      padding: '10px', zIndex: '2000', cursor: 'move', color: 'black'
     });
     attachMoveAndResize(el, doc, container);
     container.appendChild(el);
@@ -178,7 +236,7 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
     clearSelection(doc);
     const el = doc.createElement("div");
     el.className = "draggable-element selected";
-    const base = { position: 'absolute', left: '100px', top: '100px', width: '120px', height: '120px', zIndex: '1500', cursor: 'move' };
+    const base = { position: 'absolute', left: '100px', top: '100px', width: '120px', height: '120px', zIndex: '2200', cursor: 'move' };
     if (type === 'square') Object.assign(el.style, base, { backgroundColor: '#3b82f6' });
     if (type === 'circle') Object.assign(el.style, base, { backgroundColor: '#ef4444', borderRadius: '50%' });
     if (type === 'triangle') Object.assign(el.style, base, { backgroundColor: '#22c55e', clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' });
@@ -200,8 +258,20 @@ export default function Toolbar({ onAddPage, onExport }: ToolbarProps) {
       <div className="flex items-center justify-between px-6 h-20">
         <div className="flex items-center">
           <ToolGroup>
-            <button onClick={() => { }} className="p-2 hover:bg-zinc-800 opacity-20"><Undo2 size={18} /></button>
-            <button onClick={() => { }} className="p-2 hover:bg-zinc-800 opacity-20"><Redo2 size={18} /></button>
+            <button
+              onClick={undo}
+              disabled={historyIndex <= 0}
+              className="p-2 hover:bg-zinc-800 disabled:opacity-20 transition-opacity"
+            >
+              <Undo2 size={18} />
+            </button>
+            <button
+              onClick={redo}
+              disabled={historyIndex >= history.length - 1}
+              className="p-2 hover:bg-zinc-800 disabled:opacity-20 transition-opacity"
+            >
+              <Redo2 size={18} />
+            </button>
           </ToolGroup>
 
           <ToolGroup>

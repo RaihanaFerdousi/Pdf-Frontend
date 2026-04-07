@@ -1,6 +1,8 @@
 import { useLocation } from "react-router";
 import * as React from "react";
 import Toolbar from "~/Components/Toolbar";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 const BLANK_PAGE_HTML = `
   <!DOCTYPE html>
@@ -13,7 +15,7 @@ const BLANK_PAGE_HTML = `
           display: flex; 
           flex-direction: column; 
           align-items: center; 
-          gap: 40px; /* SPACE BETWEEN PAGES */
+          gap: 14px;
         }
         .pc { 
           background: white; width: 600px; height: 1100px; 
@@ -75,6 +77,7 @@ export default function Editor() {
     doc.dispatchEvent(event);
   };
 
+
   const setupStyles = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
     const frame = e.currentTarget;
     const frameDoc = frame.contentDocument || frame.contentWindow?.document;
@@ -108,8 +111,15 @@ export default function Editor() {
 
     frameDoc.addEventListener('mousedown', (ev) => {
       const target = ev.target as HTMLElement;
-      if (target.id === 'page-container' || target.tagName === 'BODY' || target.classList.contains('pc')) {
-        frameDoc.querySelectorAll('.draggable-element').forEach(el => el.classList.remove('selected'));
+
+      // Don't clear selection if clicking an element, its handle, or a text box
+      const isElement = target.closest('.draggable-element');
+      const isHandle = target.classList.contains('resizer-handle');
+
+      if (!isElement && !isHandle) {
+        frameDoc.querySelectorAll('.draggable-element').forEach(el =>
+          el.classList.remove('selected')
+        );
       }
     });
 
@@ -122,7 +132,7 @@ export default function Editor() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950">
+    <div className="flex flex-col h-screen bg-zinc-950 overflow-hidden">
       <Toolbar onAddPage={handleAddPage} />
       <div className="flex-1 flex justify-center p-4">
         {blobUrl ? (
