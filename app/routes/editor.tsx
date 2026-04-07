@@ -124,15 +124,13 @@ export default function Editor() {
   };
 
 const createPageImage = async (page: HTMLElement) => {
-  // 1. Use html2canvas to capture the entire page div as it appears
   const canvas = await html2canvas(page, {
-    scale: 2,            // Higher scale = crisper PDF (2 is usually plenty)
-    useCORS: true,       // Helps if you have external images
+    scale: 2,  
+    useCORS: true,  
     backgroundColor: '#ffffff',
     logging: false,
   });
 
-  // 2. Return the high-quality image data
   return canvas.toDataURL('image/png');
 };
 
@@ -148,14 +146,10 @@ const handleExport = async () => {
   const pdfDoc = await PDFDocument.create();
 
   for (const page of pages) {
-    // Convert the HTML page to a PNG image string
     const imageDataUrl = await createPageImage(page);
     
-    // Embed the PNG into the PDF
+
     const pngImage = await pdfDoc.embedPng(imageDataUrl);
-    
-    // Logic to keep the PDF page size standard (e.g., 600x1100 as per your CSS)
-    // Since we used scale: 2, we divide by 2 to keep the physical dimensions correct
     const pdfPage = pdfDoc.addPage([pngImage.width / 2, pngImage.height / 2]);
     
     pdfPage.drawImage(pngImage, {
